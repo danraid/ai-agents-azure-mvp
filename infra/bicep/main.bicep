@@ -1,0 +1,1 @@
+targetScope = 'resourceGroup'\nparam location string = resourceGroup().location\nparam namePrefix string\n

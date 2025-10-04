@@ -1,0 +1,20 @@
+version: "3.9"
+services:
+  orchestrator:
+    build: ./app/orchestrator
+    ports: ["8080:8080"]
+  agent_policy:
+    build: ./app/agents/policy
+    ports: ["8081:8080"]
+  agent_bankingops:
+    build: ./app/agents/bankingops
+    ports: ["8082:8080"]
+  agent_boleto:
+    build: ./app/agents/boleto
+    ports: ["8083:8080"]
+  agent_ragdocs:
+    build: ./app/agents/ragdocs
+    ports: ["8084:8080"]
+  agent_verifier:
+    build: ./app/agents/verifier
+    ports: ["8085:8080"]

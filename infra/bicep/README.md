@@ -1,0 +1,1 @@
+# Adicione aqui seus módulos Bicep de Azure (ACR, Container Apps, Blob, Search, App Insights, PostgreSQL).\n
