@@ -1,0 +1,13 @@
+# One-stop requirements (Windows-friendly) for the whole MVP
+# Web/agents
+fastapi==0.112.2
+uvicorn[standard]==0.30.6
+httpx==0.27.2
+pydantic==2.9.2
+tenacity==9.0.0
+python-multipart==0.0.9
+
+# Azure SDKs
+azure-storage-blob==12.21.0
+azure-ai-formrecognizer==3.3.2     # OCR / Document Intelligence
+azure-search-documents==11.5.3     # Azure AI Search (RAG)
