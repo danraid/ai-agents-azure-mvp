@@ -1,265 +1,316 @@
-# Azure AI Agents MVP (Orchestrator + Actions in Azure AI Foundry)
+# Azure AI Agents MVP (Orchestrator + Anonymous Actions)
 
-Minimal working MVP where a **Foundry Agent (orchestrator)** calls 5 lightweight HTTP **agent services** via **Actions (OpenAPI)**:
+A minimal **agentic** MVP where an **Azure AI Foundry Agent (orchestrator)** calls five lightweight HTTP services published on **Azure Container Apps (ACA)** via **Actions** (OpenAPI) using **Anonymous** authentication.
 
-- **policy** → `policy_authorize` (checks user scopes)
-- **bankingops** → `transfer_estimate`, `account_info` (stubs)
-- **boleto** → `boleto_search` (returns `doc_id` for invoices/bills)
-- **ragdocs** → `ragdocs_retrieve` (returns *evidence* for a given `doc_id`)
-- **verifier** → `verifier_check` (validates final answer requires evidence)
-
-**Example flow** (“Which bills are due this week?”):  
-`policy.authorize → boleto.search → ragdocs.retrieve(doc_id) → verifier.check`  
-Final answer includes a short list (≤5) + **Evidence** (`docId`, page, snippet).
-
----
-
-## Table of Contents
-- [Architecture](#architecture)
-- [Repo Structure](#repo-structure)
-- [Prerequisites](#prerequisites)
-- [Run Locally](#run-locally)
-- [Deploy to Azure Container Apps](#deploy-to-azure-container-apps)
-- [Configure Actions in Azure AI Foundry](#configure-actions-in-azure-ai-foundry)
-- [Test Scenarios](#test-scenarios)
-- [Cost Controls](#cost-controls)
-- [Troubleshooting](#troubleshooting)
-- [Cleanup](#cleanup)
-- [License](#license)
+> This README is a single, self‑contained file you can paste into your repo. It includes:
+>
+> * Architecture & repo layout
+> * Local run & ACA deployment
+> * Cost control (freeze ACA & disable ingress)
+> * **Azure AI Foundry**: full **System Prompt**, **tool wiring**, and **anonymous auth** details
+> * Test scenarios and expected tool call chains
 
 ---
 
 ## Architecture
 
-User → Foundry Agent (LLM Orchestrator with Actions)
-├─ policy (authorization / scopes)
-├─ bankingops (bank ops, stubbed)
-├─ boleto (bill search → doc_id list)
-├─ ragdocs (RAG evidence by doc_id)
-└─ verifier (answer validation w/ evidence)
-Infra: Azure Container Apps (+ ACR), optional Azure Blob Storage, optional Azure AI Search
+```
+User → Foundry Agent (LLM Orchestrator)
+          ├─ policy       → policy_authorize
+          ├─ bankingops   → transfer_estimate, account_info (stubs)
+          ├─ boleto       → boleto_search (returns items with doc_id)
+          ├─ ragdocs      → ragdocs_retrieve (evidence by doc_id)
+          └─ verifier     → verifier_check (groundedness gate)
+Infra: Azure Container Apps (+ ACR). Optional: Azure Blob Storage, Azure AI Search.
+All services expose: GET /healthz, GET /openapi.json
+```
 
-All services expose:
-- `GET /healthz` – health check
-- `GET /openapi.json` – OpenAPI schema (paste into Foundry Action)
+**Happy path** – “Which bills are due this week?”
 
-> Sample PDFs in `pdf.test/` and minimal metadata `TEST-001.json`, `TEST-002.json`.
+```
+policy.authorize → boleto.search(range=this_week)
+  → for each item: ragdocs.retrieve(doc_id, query="…")
+  → verifier.check(answer, evidence[]) → final message with ≤5 items + evidence
+```
 
 ---
 
-## Repo Structure
+## Repository layout
 
+```
 app/
-agents/
-policy/
-main.py
-requirements.txt
-bankingops/
-main.py
-requirements.txt
-boleto/
-main.py
-requirements.txt
-ragdocs/
-Dockerfile
-main.py
-requirements.txt
-verifier/
-main.py
-requirements.txt
-common/
-azure_clients.py
-logging_conf.py
-models.py
-orchestrator/
-Dockerfile
-main.py
-requirements.txt
+  agents/
+    policy/
+    bankingops/
+    boleto/
+    ragdocs/
+    verifier/
+  common/
+    azure_clients.py
+    logging_conf.py
+    models.py
+  orchestrator/
+    Dockerfile
+    main.py
+    requirements.txt
 infra/
-bicep/
-main.bicep (skeleton only)
+  bicep/
+    main.bicep (skeleton)
 pdf.test/
-boleto1.pdf
-boleto2.pdf
+  boleto1.pdf
+  boleto2.pdf
 TEST-001.json
 TEST-002.json
 docker-compose.yml
-requirements.txt (optional, root)
-
+```
 
 ---
 
 ## Prerequisites
 
-- Docker Desktop
-- Python 3.10+ (only if you run without Docker)
-- Azure CLI:
-  ```bash
+* **Azure CLI**
+
+  ```powershell
   az extension add -n containerapp --upgrade
   az provider register -n Microsoft.App --wait
-  az provider register -n Microsoft.OperationalInsights --wait
-(Optional) Azure Storage for real blob data:
+  ```
+* **Docker** (for local & ACA builds)
+* **Python 3.10+** if you want to run the services without Docker
 
-STORAGE_CONN (connection string)
+---
 
-BOLETO_CONTAINER (e.g., boletos)
+## Run locally
 
-Run Locally
-Option A — Docker Compose (recommended)
+### Option A — Individual services (dev mode)
 
-docker compose up --build
-Health & OpenAPI (adjust ports as your compose maps):
+For each folder under `app/agents/<service>`:
 
-curl http://localhost:8080/healthz          # orchestrator
-curl http://localhost:8081/openapi.json      # policy
-curl http://localhost:8082/openapi.json      # bankingops
-curl http://localhost:8083/openapi.json      # boleto
-curl http://localhost:8084/openapi.json      # ragdocs
-curl http://localhost:8085/openapi.json      # verifier
-Option B — Per service (without Docker)
-
-cd app/agents/policy
+```powershell
+python -m venv .venv
+. .venv/Scripts/Activate.ps1  # (Linux/Mac: source .venv/bin/activate)
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8081
-# Repeat for each folder, changing the port
-Environment variables (if needed)
+uvicorn main:app --reload --port 8080   # change port per service
+```
 
-STORAGE_CONN="DefaultEndpointsProtocol=...;AccountName=...;AccountKey=...;"
-BOLETO_CONTAINER="boletos"
-LOG_LEVEL=INFO
-Deploy to Azure Container Apps
-Use one Resource Group and one Container Apps Environment for all services.
+### Option B — Docker Compose
 
+From repo root:
 
-# Variables
-RG="agents-rg"
-LOC="eastus"
-ENV_NAME="agents-cae"
-ACR_NAME="agentsacr$RANDOM"
+```bash
+docker-compose up --build
+```
 
-# Resource Group + ACA Environment + ACR
-az group create -n $RG -l $LOC
-az containerapp env create -g $RG -n $ENV_NAME -l $LOC
-az acr create -g $RG -n $ACR_NAME --sku Basic
-az acr login -n $ACR_NAME
-Build & Push (example: policy)
+Each service exposes `/healthz` and `/openapi.json`.
 
+---
 
-cd app/agents/policy
-docker build -t $ACR_NAME.azurecr.io/agent-policy:latest .
-docker push $ACR_NAME.azurecr.io/agent-policy:latest
-Create each Container App
+## Deploy to Azure Container Apps (quick path)
 
-az containerapp create -g $RG -n agent-policy \
-  --environment $ENV_NAME \
-  --image $ACR_NAME.azurecr.io/agent-policy:latest \
-  --target-port 8080 --ingress external \
+> Assumes you already have an **ACR** and a **Container Apps Environment (CAE)**. If not, you can create them with Azure CLI or portal.
+
+Build & push images (example using Docker/ACR):
+
+```bash
+# Login to ACR
+az acr login -n <ACR_NAME>
+
+# Build & push (repeat per service)
+docker build -t <ACR_NAME>.azurecr.io/agent-policy:latest ./app/agents/policy
+docker push <ACR_NAME>.azurecr.io/agent-policy:latest
+```
+
+Create/update Container Apps (example):
+
+```bash
+RG=<your-rg>
+ENV=<your-cae-name>
+IMG=<ACR_NAME>.azurecr.io/agent-policy:latest
+
+az containerapp create \
+  -g $RG -n agent-policy \
+  --environment $ENV \
+  --image $IMG \
+  --ingress external --target-port 8080 \
   --min-replicas 1 --max-replicas 1
-Repeat for: agent-banking, agent-boleto, agent-rag, agent-verifier (and agent-orchestrator if you want to expose it).
+```
 
-Get FQDNs & Smoke test (PowerShell)
+Discover FQDNs and smoke test:
 
+```powershell
+az containerapp list --query "[].{name:name,fqdn:properties.configuration.ingress.fqdn,rg:resourceGroup}" -o table
+$POLICY_FQDN = az containerapp show -g <RG> -n agent-policy --query "properties.configuration.ingress.fqdn" -o tsv
+Invoke-WebRequest "https://$POLICY_FQDN/healthz" -UseBasicParsing
+Invoke-WebRequest "https://$POLICY_FQDN/openapi.json" -UseBasicParsing
+```
 
+Repeat for: `agent-banking`, `agent-boleto`, `agent-rag`, `agent-verifier`.
+
+---
+
+## Configure the Orchestrator in **Azure AI Foundry**
+
+### 1) Create the Agent
+
+* **Name**: Orchestrator
+* **Model**: a GPT‑4 class model (e.g., `gpt-4o-mini` / `gpt-4.1-mini`) according to your availability
+* **Response style**: Balanced (or Precise)
+
+### 2) Paste the **System Prompt** (full text)
+
+```text
+You are an orchestration agent for banking operations. You have five HTTP tools:
+
+1) policy_authorize(user_id, scope) → { ok: boolean }
+   - Call this first for any action that reads or lists bills (scope: "read:boletos").
+
+2) boleto_search(range) → { range: string, items: [{ doc_id: string }] }
+   - range is natural language (e.g., "this_week", "next_week", "overdue").
+   - Returns up to a few items with a unique doc_id for each bill.
+
+3) ragdocs_retrieve(doc_id, query) → { evidence: [{ doc_id: string, page: number, snippet: string }] }
+   - Given a document id from boleto_search, get a small snippet confirming due date/amount.
+   - Call once per selected item; aggregate the evidence.
+
+4) verifier_check(answer, evidence[]) → { ok: boolean }
+   - Use this to validate the final answer is grounded in the retrieved evidence.
+
+5) bankingops (transfer_estimate, account_info) → stubs for future flows.
+
+Policy:
+- Always call policy_authorize before reading boleto info.
+- If authorization fails, explain the user scope required (read:boletos) and stop.
+- Keep final lists ≤ 5 items.
+- Always show an Evidence section with [{docId, page, snippet}] summarizing the proof.
+- If ragdocs_retrieve returns empty evidence, either re-try with a clearer query or exclude that item.
+- Before replying to the user, call verifier_check with the full text answer and the collected evidence.
+- If verifier_check.ok == false, refine the answer or the retrieval and try again once.
+
+Formatting:
+- Use concise bullet points for lists.
+- Portuguese or English according to the user’s input language.
+- Do not reveal internal tool call details.
+```
+
+> Tip: keep the prompt in **Portuguese** if your users will chat in Portuguese.
+
+### 3) Add **Actions** (Tools) — **Authentication: Anonymous**
+
+For each service, click **Add action → OpenAPI schema** and paste the service’s `openapi.json`. Set:
+
+* **Auth method**: **Anonymous**
+* **Base URL**: the service **FQDN** (e.g., `https://agent-policy.<random>.<region>.azurecontainerapps.io`)
+
+You should end up with **five actions** in the Agent:
+
+* `policy`  → exposes `policy_authorize`
+* `bankingops` → exposes `transfer_estimate`, `account_info`
+* `boleto` → exposes `boleto_search`
+* `ragdocs` → exposes `ragdocs_retrieve`
+* `verifier` → exposes `verifier_check`
+
+> In the **Foundry Actions UI**, paste the entire OpenAPI JSON content and choose **Anonymous**.
+
+### 4) Inference settings (suggested)
+
+* **Max output tokens**: 1024–2048
+* **Temperature**: 0.2–0.5 (lower = more deterministic for tool use)
+* **Top P**: default
+* **Tool choice**: Auto / Let model decide
+
+---
+
+## Test Scenarios (Playground → Agents)
+
+### Scenario A — Bills (short list)
+
+**User**: *Quais boletos vencem esta semana?*
+
+**Expected chain**: `policy_authorize → boleto_search("this_week") → ragdocs_retrieve(doc_id...) → verifier_check → final`
+**Expected answer**: a list with ≤5 items and an **Evidence** section like:
+
+```
+Evidências:
+- {docId: "TEST-001", página: 1, trecho: "Vencimento e valor confirmados no documento."}
+- {docId: "TEST-002", página: 1, trecho: "Vencimento e valor confirmados no documento."}
+```
+
+### Scenario B — No results
+
+**User**: *Há boletos vencendo hoje?*
+If `boleto_search` returns empty, the agent replies that no bills are due today.
+
+### Scenario C — Banking stubs
+
+**User**: *Simule uma transferência de R$100*
+The agent may call `bankingops.transfer_estimate` (stubbed) and respond accordingly.
+
+---
+
+## Cost Controls (ACA)
+
+### Freeze replicas (scale to zero)
+
+> ACA requires `max-replicas ≥ 1`. To stop runtime costs, set **min=0** so instances scale to zero when idle. Optionally disable ingress.
+
+```powershell
 $RG = "agents-rg"
 $apps = "agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
 
 foreach ($app in $apps) {
-  $fqdn = az containerapp show -g $RG -n $app --query "properties.configuration.ingress.fqdn" -o tsv
-  "$app -> https://$fqdn"
-  Invoke-WebRequest "https://$fqdn/healthz" -UseBasicParsing
-  Invoke-WebRequest "https://$fqdn/openapi.json" -UseBasicParsing
+  az containerapp update -g $RG -n $app --min-replicas 0 --max-replicas 1
 }
-Configure Actions in Azure AI Foundry
-Foundry → Agents → (your Orchestrator Agent) → Actions → Add → OpenAPI
-Auth method: Anonymous (for MVP). Paste each service’s /openapi.json.
+```
 
-Create 5 Actions:
+Check replicas (should empty after idling):
 
-policy
+```powershell
+foreach ($app in $apps) {
+  az containerapp replica list -g $RG -n $app -o table
+}
+```
 
-Schema: OpenAPI from https://<policy-fqdn>/openapi.json
+### Disable ingress (stop external traffic)
 
-Main op: policy_authorize
+```powershell
+foreach ($app in $apps) {
+  az containerapp ingress disable -g $RG -n $app
+}
+```
 
-bankingops
+> When you want to test again, re-enable ingress:
 
-Schema: https://<banking-fqdn>/openapi.json
+```powershell
+az containerapp ingress enable -g $RG -n agent-policy --type external --target-port 8080
+# repeat for each service as needed
+```
 
-boleto
+> **Note:** If you completely shut down (min=0) **and** disable ingress, Foundry actions will fail until you re-enable ingress and ACA scales back from zero (few seconds after first hit).
 
-Schema: https://<boleto-fqdn>/openapi.json
+---
 
-Main op: boleto_search
+## Azure AI Services cost note
 
-ragdocs
+If you used **Azure AI Foundry** evaluations or features (e.g., safety evaluations), you may see charges under **Azure Machine Learning service - Safety Evaluations Input tokens**. To reduce:
 
-Schema: https://<rag-fqdn>/openapi.json
+* Avoid running evaluation jobs if not needed.
+* Use smaller models (e.g., `gpt-4o-mini`) during development.
+* Limit token output and session length in Playground.
 
-Main op: ragdocs_retrieve
+---
 
-Orchestrator must pass doc_id from boleto results.
+## Troubleshooting
 
-verifier
+* **Subscription not registered for Microsoft.App**
 
-Schema: https://<verifier-fqdn>/openapi.json
+  ```bash
+  az provider register -n Microsoft.App --wait
+  ```
+* **OpenAPI action fails**: Check that `/openapi.json` resolves publicly and that the **Base URL** in Foundry matches your ACA FQDN (https://...).
+* **401/403 from services**: Actions must be **Anonymous**; ensure your service endpoints do not require auth for the MVP.
+* **No evidence**: Refine the `query` sent to `ragdocs_retrieve` (e.g., "comprovar vencimento e valor do boleto").
 
-Main op: verifier_check
+---
 
-System Prompt (Orchestrator) — paste as Instructions
+## License
 
-
-You are the orchestrator. Route tool calls and require evidence for any document-based claim.
-
-Tools:
-- policy.authorize: always first when reading banking/boletos.
-- bankingops: estimates and account summaries.
-- boleto.search: list bills by time range (default: this_week).
-- ragdocs.retrieve: fetch evidence for each doc_id returned by boleto.
-- verifier.check: approve final answer; if fails, revise and try again.
-
-Answer in English with compact lists (≤5). Include an "Evidence" section with [{docId, page, snippet}] whenever documents are referenced. If data is missing, ask a clarifying question.
-Test Scenarios
-Bills – short list
-Prompt: “Which bills are due this week?”
-Expected chain: policy → boleto.search → ragdocs.retrieve(doc_id) → verifier.check
-Output: short list (≤5) + Evidence (docId, page, snippet).
-
-Cost Controls
-Scale-to-zero & disable ingress (ACA)
-
-
-$RG="agents-rg"
-$apps="agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
-
-# Allow idle to zero (keeps ingress)
-foreach ($app in $apps) { az containerapp update -g $RG -n $app --min-replicas 0 --max-replicas 1 }
-
-# Fully cut public traffic
-foreach ($app in $apps) { az containerapp ingress disable -g $RG -n $app }
-
-# Re-enable when needed
-foreach ($app in $apps) { az containerapp ingress enable -g $RG -n $app --type external --target-port 8080 }
-ACA storage & ACR images still incur storage cents. Delete unused images/blobs for zero.
-
-Foundry/ML Evaluation costs: avoid running large “Safety/Evaluation” jobs; sample small subsets, use cheaper evaluators, lower token limits, and set budgets/alerts in Cost Management.
-
-Troubleshooting
---ingress none not recognized → use az containerapp ingress disable instead.
-
-Provider not registered → az provider register -n Microsoft.App --wait
-
-Action save fails (400) → ensure https://<fqdn>/openapi.json is reachable and valid; keep Anonymous auth for MVP.
-
-No replicas dropping → set min-replicas 0, then deactivate the active revision to force zero immediately:
-
-
-$rev = az containerapp revision list -g $RG -n <app> --query "[?properties.active==\`true\`].name" -o tsv
-foreach ($r in $rev) { az containerapp revision deactivate -g $RG -n <app> --revision $r }
-Cleanup
-
-# Nuke the whole MVP (resource group)
-az group delete -n agents-rg --yes --no-wait
-License
-Educational MVP with stub services. Not production-ready (auth, private networking, secrets, logging, policies, etc. must be hardened).
-
-::contentReference[oaicite:0]{index=0}
+MIT (or your preferred license) — sample code for demonstration purposes only.
