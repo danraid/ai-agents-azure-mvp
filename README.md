@@ -41,9 +41,6 @@ Usuário → Orquestrador (LLM no AI Foundry, com Actions)
 └─ verifier (checagem de groundedness)
 Infra: Azure Container Apps + (opcional) Blob Storage + (opcional) Azure AI Search
 
-yaml
-Copiar código
-
 ---
 
 ## Estrutura do repositório
@@ -85,9 +82,6 @@ TEST-002.json
 docker-compose.yml
 requirements.txt (raiz, opcional)
 
-yaml
-Copiar código
-
 ---
 
 ## Pré-requisitos
@@ -105,14 +99,10 @@ Var STORAGE_CONN (Connection String) e BOLETO_CONTAINER (ex.: boletos)
 
 Rodando localmente
 1) Com Docker Compose (recomendado)
-bash
-Copiar código
 docker compose up --build
 # Acompanhe logs e portas mapeadas no compose
 Health & OpenAPI (ajuste portas se necessário):
 
-bash
-Copiar código
 curl http://localhost:8080/healthz          # orchestrator
 curl http://localhost:8081/openapi.json      # policy
 curl http://localhost:8082/openapi.json      # bankingops
@@ -120,8 +110,6 @@ curl http://localhost:8083/openapi.json      # boleto
 curl http://localhost:8084/openapi.json      # ragdocs
 curl http://localhost:8085/openapi.json      # verifier
 2) Em cada serviço (sem Docker)
-bash
-Copiar código
 cd app/agents/policy
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8081
@@ -131,8 +119,6 @@ Para usar PDFs de teste, nenhuma configuração extra é necessária; as respost
 Deploy no Azure (Container Apps)
 Sugestão: use o mesmo Resource Group e um único Environment de ACA para todos os serviços.
 
-bash
-Copiar código
 # Variáveis
 RG="agents-rg"
 LOC="eastus"
@@ -145,14 +131,12 @@ az containerapp env create -g $RG -n $ENV_NAME -l $LOC
 az acr create -g $RG -n $ACR_NAME --sku Basic
 az acr login -n $ACR_NAME
 Build & Push (exemplo: policy)
-bash
-Copiar código
+
 cd app/agents/policy
 docker build -t $ACR_NAME.azurecr.io/agent-policy:latest .
 docker push $ACR_NAME.azurecr.io/agent-policy:latest
 Criar cada Container App
-bash
-Copiar código
+
 # Política (repita para os demais trocando nome/porta/imagem)
 az containerapp create -g $RG -n agent-policy \
   --environment $ENV_NAME \
@@ -162,8 +146,7 @@ az containerapp create -g $RG -n agent-policy \
 Repita para: agent-banking, agent-boleto, agent-rag, agent-verifier, agent-orchestrator (se desejar publicar o orquestrador como API).
 
 Descobrir FQDNs + Smoke test (PowerShell)
-ps1
-Copiar código
+
 $apps = "agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
 $RG   = "agents-rg"
 
@@ -218,8 +201,6 @@ Em Azure Container Apps, você pode reduzir custo deixando minReplicas=0 (auto-s
 
 Exemplos (PowerShell):
 
-ps1
-Copiar código
 $RG="agents-rg"
 $apps="agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
 
@@ -251,13 +232,10 @@ Sem permissões na sub: garanta acesso à assinatura/RG antes de criar ACA/ACR.
 
 Custos inesperados (ex.: Azure ML/AI Services): verifique a assinatura correta e execute:
 
-bash
-Copiar código
 az resource list -o table
 # Identifique serviços fora do RG do MVP (ex.: Machine Learning service)
 Limpeza
-bash
-Copiar código
+
 # Apagar tudo do MVP
 az group delete -n agents-rg --yes --no-wait
 
@@ -267,8 +245,6 @@ Licença & Avisos
 Este projeto é um MVP educacional com serviços stub.
 Não é recomendado para produção sem hardening (auth, rede privada, logs, políticas, etc.).
 
-makefile
-Copiar código
 ::contentReference[oaicite:0]{index=0}
 
 
@@ -281,8 +257,7 @@ tem que ser em ingles
 
 
 O ChatGPT disse:
-md
-Copiar código
+
 # Azure AI Agents MVP (Orchestrator + Actions in Azure AI Foundry)
 
 Minimal working MVP where a **Foundry Agent (orchestrator)** calls 5 lightweight HTTP **agent services** via **Actions (OpenAPI)**:
@@ -323,9 +298,6 @@ User → Foundry Agent (LLM Orchestrator with Actions)
 ├─ ragdocs (RAG evidence by doc_id)
 └─ verifier (answer validation w/ evidence)
 Infra: Azure Container Apps (+ ACR), optional Azure Blob Storage, optional Azure AI Search
-
-yaml
-Copiar código
 
 All services expose:
 - `GET /healthz` – health check
@@ -374,8 +346,6 @@ TEST-002.json
 docker-compose.yml
 requirements.txt (optional, root)
 
-yaml
-Copiar código
 
 ---
 
@@ -396,13 +366,10 @@ BOLETO_CONTAINER (e.g., boletos)
 
 Run Locally
 Option A — Docker Compose (recommended)
-bash
-Copiar código
+
 docker compose up --build
 Health & OpenAPI (adjust ports as your compose maps):
 
-bash
-Copiar código
 curl http://localhost:8080/healthz          # orchestrator
 curl http://localhost:8081/openapi.json      # policy
 curl http://localhost:8082/openapi.json      # bankingops
@@ -410,24 +377,20 @@ curl http://localhost:8083/openapi.json      # boleto
 curl http://localhost:8084/openapi.json      # ragdocs
 curl http://localhost:8085/openapi.json      # verifier
 Option B — Per service (without Docker)
-bash
-Copiar código
+
 cd app/agents/policy
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8081
 # Repeat for each folder, changing the port
 Environment variables (if needed)
 
-env
-Copiar código
 STORAGE_CONN="DefaultEndpointsProtocol=...;AccountName=...;AccountKey=...;"
 BOLETO_CONTAINER="boletos"
 LOG_LEVEL=INFO
 Deploy to Azure Container Apps
 Use one Resource Group and one Container Apps Environment for all services.
 
-bash
-Copiar código
+
 # Variables
 RG="agents-rg"
 LOC="eastus"
@@ -441,15 +404,12 @@ az acr create -g $RG -n $ACR_NAME --sku Basic
 az acr login -n $ACR_NAME
 Build & Push (example: policy)
 
-bash
-Copiar código
+
 cd app/agents/policy
 docker build -t $ACR_NAME.azurecr.io/agent-policy:latest .
 docker push $ACR_NAME.azurecr.io/agent-policy:latest
 Create each Container App
 
-bash
-Copiar código
 az containerapp create -g $RG -n agent-policy \
   --environment $ENV_NAME \
   --image $ACR_NAME.azurecr.io/agent-policy:latest \
@@ -459,8 +419,7 @@ Repeat for: agent-banking, agent-boleto, agent-rag, agent-verifier (and agent-or
 
 Get FQDNs & Smoke test (PowerShell)
 
-ps1
-Copiar código
+
 $RG = "agents-rg"
 $apps = "agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
 
@@ -508,8 +467,7 @@ Main op: verifier_check
 
 System Prompt (Orchestrator) — paste as Instructions
 
-csharp
-Copiar código
+
 You are the orchestrator. Route tool calls and require evidence for any document-based claim.
 
 Tools:
@@ -529,8 +487,7 @@ Output: short list (≤5) + Evidence (docId, page, snippet).
 Cost Controls
 Scale-to-zero & disable ingress (ACA)
 
-ps1
-Copiar código
+
 $RG="agents-rg"
 $apps="agent-policy","agent-banking","agent-boleto","agent-rag","agent-verifier"
 
@@ -555,18 +512,14 @@ Action save fails (400) → ensure https://<fqdn>/openapi.json is reachable and 
 
 No replicas dropping → set min-replicas 0, then deactivate the active revision to force zero immediately:
 
-ps1
-Copiar código
+
 $rev = az containerapp revision list -g $RG -n <app> --query "[?properties.active==\`true\`].name" -o tsv
 foreach ($r in $rev) { az containerapp revision deactivate -g $RG -n <app> --revision $r }
 Cleanup
-bash
-Copiar código
+
 # Nuke the whole MVP (resource group)
 az group delete -n agents-rg --yes --no-wait
 License
 Educational MVP with stub services. Not production-ready (auth, private networking, secrets, logging, policies, etc. must be hardened).
 
-makefile
-Copiar código
 ::contentReference[oaicite:0]{index=0}
